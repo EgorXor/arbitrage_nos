@@ -1,0 +1,216 @@
+class Formatter:
+
+    @classmethod
+    def query(cls, message, callback=None):
+        value = text_file.menu.get(callback if callback is not None else message.text)
+        if value:
+            prev = QueryDb.get_user(message.chat.id)
+            if not prev:
+                user = QueryDb.save_user_state(message.chat.id, message.chat.first_name,
+                                           callback if callback is not None else message.text, None)
+            else:
+                user = QueryDb.save_user_state(message.chat.id, message.chat.first_name,
+                                               callback if callback is not None else message.text, prev.state)
+
+            if message.text == '/start' or callback == '?? На главную':
+                keyboard = helper.make_inline_keyboard(value.keyboard)
+                if user.admin:
+                    keyboard = helper.make_inline_keyboard(value.keyboard, admin=True)
+                sub = user.sub
+                if sub:
+                    # Проверка времени и высчитывание оставшихся дней
+                    if sub[0].date:
+                        return value.text[1].format(sub[0].group, (sub[0].date - datetime.now()).days + 1), keyboard
+                    elif sub[0].perm:
+                        return value.text[1].format(sub[0].group, '\U0000221E'), keyboard
+                return value.text[0], keyboard
+
+            elif callback == '?? Получить партнерскую ссылку':
+                # Вынести ссылку в настройки
+                kb = helper.make_inline_keyboard(value.keyboard)
+                return value.text.format(BOT_NAME, message.chat.id), kb
+
+            elif callback == '?? Статистика':
+                profit = user.profit
+                referrals = user.ref
+                keyboard = helper.make_inline_keyboard(value.keyboard)
+                return value.text.format(referrals.count(), profit[0].count), keyboard
+
+            elif callback == '?? Вывод средств':
+                kb = helper.make_inline_keyboard(value.keyboard)
+                profit = user.profit
+                count = profit[0].count
+                if count:
+                    return value.text[1].format(count), kb
+                return value.text[0], kb
+
+            # Сделать проверку времени, если осталось 3 дня показать кнопку продлить, иначе нет
+            elif callback == '?? Новичок':
+                sub = user.sub
+                if sub and sub[0].date and (sub[0].date - datetime.now()).days > 2:
+                    return 'Вы сможете продлить подписка как только останется 3 дня', \
+                           helper.make_inline_keyboard((['?? Назад'], ['?? На главную']))
+
+            elif callback == '?? Обучение':
+                wikies = '\n\n'.join([f'<a href="{wiki.link}">{wiki.description}</a>' for wiki in QueryDb.get_wiki()])
+                kb = helper.make_inline_keyboard(value.keyboard)
+                return value.text.format(wikies), kb
+
+            keyboard = helper.make_inline_keyboard(value.keyboard)
+            return value.text, keyboard
+
+        user = QueryDb.get_user(message.chat.id)
+        if callback == '?? Подписаться' and user.state == '?? Новичок':
+            user.prev = '?? Новичок'
+            user.save()
+            sub = QueryDb.save_sub(user, 30)
+            value = text_file.menu.get('/start')
+            keyboard = helper.make_inline_keyboard(value.keyboard)
+            if user.admin:
+                keyboard = helper.make_inline_keyboard(value.keyboard, admin=True)
+            return value.text[1].format(sub.group, (sub.date - datetime.now()).days + 1), keyboard
+
+        elif user.state in ['?? Трейдер', '?? VIP', '?? Platinum']:
+            answer = text_file.price.get(user.state).get(callback)
+            if answer is None:
+                return 'Используйте новую клавиатуру', helper.make_inline_keyboard((['?? На главную'],))
+            prev = QueryDb.get_user(message.chat.id)
+            user = QueryDb.save_user_state(message.chat.id, message.chat.first_name, callback, prev.state)
+
+            keyboard = helper.make_inline_keyboard((['?? Помощь'], ['?? Назад', '?? На главную']))
+            sub = user.sub
+            if not sub:
+                new_sub = QueryDb.save_sub(user)
+                return answer.format(new_sub.id), keyboard
+            return answer.format(sub[0].id), keyboard
+
+        if user.admin:
+            pass
+
+        return 'Не понимаю', helper.make_inline_keyboard((['?? На главную'],))
+
+    @classmethod
+    def add_ref(cls, message, uid):
+        value = text_file.menu.get('/start')
+        QueryDb.add_referral(message, uid)
+        return value.text[0], helper.make_inline_keyboard(value.keyboard)
+
+    @classmethod
+    def admin_panel(cls, user, callback):
+        admin = QueryDb.get_user(user.chat.id)
+
+        if admin.admin:
+            value = text_file.admin.get(callback)
+
+            if value:
+                QueryDb.save_user_state(user.chat.id, user.chat.first_name, callback, None)
+
+                if callback == 'Удалить админа':
+                    all_admins = '\n'.join([f'{adm.uid} - {adm.f_name}' for adm in QueryDb.get_all_admins()])
+                    keyboard = helper.make_inline_keyboard(value.keyboard)
+                    return value.text.format(all_admins), keyboard
+
+                elif callback == 'Удалить статью':
+                    wikies = '\n\n'.join([f'[{wiki.name}] '
+                                          f'{wiki.description}\n{wiki.link}' for wiki in QueryDb.get_wiki()])
+                    keyboard = helper.make_inline_keyboard(value.keyboard)
+                    return value.text.format(wikies), keyboard
+
+                elif callback == 'Статистика':
+                    kb = helper.make_inline_keyboard(value.keyboard)
+                    statistics = QueryDb.statistics()
+                    return value.text.format(*statistics), kb
+
+                keyboard = helper.make_inline_keyboard(value.keyboard)
+                return value.text, keyboard
+
+            elif admin.state == 'Добавить админа' and callback:
+                if QueryDb.permissions(callback.id):
+                   return 'Админ добавлен', helper.make_inline_keyboard((['?? Назад'], ['?? На главную']))
+
+                return 'Такого пользователя нет', helper.make_inline_keyboard((['?? Назад'], ['?? На главную']))
+
+            elif admin.state == 'Удалить админа':
+                keyboard = helper.make_inline_keyboard((['?? Назад'], ['?? На главную']))
+                if callback.isdigit() and QueryDb.permissions(int(callback), delete=True):
+                    return 'Админ удален', keyboard
+                return 'Что то пошло не так', keyboard
+
+            elif admin.state == 'Добавить статью':
+                keyboard = helper.make_inline_keyboard((['?? Назад'], ['?? На главную']))
+                try:
+                    name, link, description = callback.split('\n', maxsplit=2)
+                except (IndexError, ValueError):
+                    return 'Вы неправильно указали аргументы', keyboard
+                else:
+                    if not QueryDb.save_wiki(name, link, description):
+                        return 'Вы неправильно указали аргументы', keyboard
+                return 'Статья добавлена', keyboard
+
+            elif admin.state == 'Удалить статью':
+                keyboard = helper.make_inline_keyboard((['?? Назад'], ['?? На главную']))
+                if QueryDb.delete_wiki(callback):
+                    return 'Статья удалена', keyboard
+                return 'Такой статьи нет', keyboard
+
+            elif admin.state == 'Добавить подписчика':
+                keyboard = helper.make_inline_keyboard((['?? Назад'], ['?? На главную']))
+                try:
+                    number, group, days, money = callback.split(':')
+                except (IndexError, ValueError):
+                    try:
+                        users, group, days = callback.split(':')
+                    except (IndexError, ValueError):
+                        return 'Вы неправильно указали аргументы', keyboard
+                    else:
+                        if users.lower() == 'all':
+                            if group.isdigit() and days.isdigit() and -1 < int(group) < 5:
+                                update = QueryDb.mass_update(int(group), int(days))
+                                if update:
+                                    return 'Количество дней добавлено', keyboard
+                                return 'У вас пока нет подписчиков', keyboard
+                            return 'Указывайте только цифры', keyboard
+                        return 'Первый аргумент должен быть all', keyboard
+                else:
+                    if number.isdigit() and group.isdigit() and days.isdigit() and 0 < int(group) < 5 and \
+                            money.replace('.','').isdigit():
+                        sub = QueryDb.save_admin_sub(int(number), int(group), int(days))
+                        if sub:
+                            ref = QueryDb.check_ref(sub.uid)
+                            if ref:
+                                money = float(money)
+
+                                if ref[0].added:
+                                    ref[0].added = False
+                                    ref[0].save()
+                                    if money <= 0.025:
+                                        pay = money * 0.7
+                                    else:
+                                        pay = money * 0.5
+                                else:
+                                    pay = money * 0.2
+                                QueryDb.add_money(ref[0].referral.uid, pay)
+                            return 'Подписка оформлена', keyboard
+                        return 'Вы ввели неправильный номер договора', keyboard
+                    return 'Указывайте только цифры', keyboard
+
+        return 'Не понимаю', helper.make_inline_keyboard((['?? На главную'],))
+
+    @classmethod
+    def payments(cls, uid, money):
+        kb = helper.make_inline_keyboard((['?? Назад', '?? На главную'],))
+        try:
+            money = float(money)
+        except ValueError:
+            return 'Некорректная сумма', kb, False
+        else:
+            profit = QueryDb.get_money(uid, money)
+            if profit:
+                return f'Все прошло успешно!\n' \
+                       f'У вас осталось {profit.count} BTC\nМы передадим всю необходмую информацию администрации', kb, True
+            return 'У вас недостаточно средств, чтобы совершить вывод', kb, False
+
+    @classmethod
+    def sender(cls, photo=False):
+        users = QueryDb.get_users_id(photo)
+        return usersadmin@bithub-bot:~/Bot/app$
